@@ -1,0 +1,23 @@
+# Secrets & local env
+.env
+.env.*
+!.env.example
+secrets.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime / temp
+logs/*
+!logs/.gitkeep
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
