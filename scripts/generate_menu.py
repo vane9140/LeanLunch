@@ -140,6 +140,7 @@ def history_constraints(history: dict) -> str:
     lines.append("- 本周菜名请与最近两周明显错开，避免同菜名重复。")
     lines.append("- 主食与蛋白种类也尽量轮换（例如上周鸡胸则本周可鱼/虾/牛肉）。")
     lines.append("- 除主食外菜品必须 5–6 道；鱼只用鳕鱼或三文鱼且煎/烤。")
+    lines.append("- 除鱼以外一律炒/炖/卤，禁止香煎鸡胸等「煎」法。")
     lines.append("- 严禁辣椒/麻辣；虾皮不用，虾肉可用。")
     return "\n".join(lines)
 
@@ -312,6 +313,12 @@ def validate_menu(content: str) -> None:
             raise RuntimeError("鱼类须为鳕鱼/三文鱼，且做法为煎或烤")
         if re.search(r"清蒸.{0,6}(鳕鱼|三文鱼)|(鳕鱼|三文鱼).{0,6}清蒸", content):
             raise RuntimeError("鳕鱼/三文鱼不可清蒸，须煎或烤")
+    # 非鱼菜禁止「煎」：每个「煎」窗口须紧挨鳕鱼/三文鱼
+    for m in re.finditer(r".{0,10}煎.{0,10}", content):
+        window = m.group(0)
+        if "鳕鱼" in window or "三文鱼" in window:
+            continue
+        raise RuntimeError(f"非鱼菜不可用煎（仅鳕鱼/三文鱼可煎）：…{window.strip()}…")
     # 菜品数：记录行或「二、本周菜」下条目
     rec = parse_record_line(content)
     count = None
