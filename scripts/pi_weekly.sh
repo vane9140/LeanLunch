@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 每周日任务：加载 env → 生成下周减脂午餐方案 → 发邮件
+# 每周日任务：加载 env → 生成下周减脂午餐方案 → 发邮件 → 同步 git
 set -euo pipefail
 
 REPO_DIR="${LEAN_LUNCH_REPO_DIR:-/home/vane914/Family/LeanLunch}"
@@ -7,6 +7,8 @@ LOG_DIR="${LEAN_LUNCH_LOG_DIR:-$REPO_DIR/logs}"
 # 默认复用选题日报的邮件/LLM 配置；也可单独用 lean-lunch/env
 ENV_FILE="${LEAN_LUNCH_ENV_FILE:-$HOME/.config/fengmai-topics/env}"
 ALT_ENV="$HOME/.config/lean-lunch/env"
+GITHUB_REPO="${GITHUB_REPO_LEAN_LUNCH:-vane9140/LeanLunch}"
+BRANCH="${GITHUB_BRANCH:-main}"
 
 mkdir -p "$LOG_DIR"
 TS="$(TZ=Asia/Shanghai date +%Y-%m-%d-%H%M)"
@@ -34,6 +36,34 @@ export LLM_BASE_URL="${LLM_BASE_URL:-https://api.deepseek.com/v1}"
 export LLM_MODEL="${LLM_MODEL:-deepseek-chat}"
 
 cd "$REPO_DIR"
-echo "[run] python3 scripts/run_weekly.py"
+
+pi_git_push() {
+  echo "[git] commit + push menus/history..."
+  git add menus/*.txt data/history.json config/ README.md scripts/ 2>/dev/null || true
+  if git diff --cached --quiet; then
+    echo "  nothing to commit"
+    return 0
+  fi
+  local day
+  day="$(TZ=Asia/Shanghai date +%Y-%m-%d)"
+  git -c user.name="${GIT_AUTHOR_NAME:-lean-lunch-pi}" \
+      -c user.email="${GIT_AUTHOR_EMAIL:-lean-lunch-pi@local}" \
+      commit -m "weekly lean lunch $day [pi]"
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    if ! git remote get-url origin >/dev/null 2>&1; then
+      git remote add origin "https://github.com/${GITHUB_REPO}.git"
+    fi
+    git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" "HEAD:${BRANCH}" \
+      || echo "  WARN: git push failed (create GitHub repo ${GITHUB_REPO} or check token)"
+  else
+    echo "  SKIP push: GITHUB_TOKEN not set"
+    git push origin "HEAD:${BRANCH}" 2>/dev/null \
+      || echo "  WARN: push skipped/failed (configure remote/token)"
+  fi
+}
+
+echo "[1/2] python3 scripts/run_weekly.py"
 python3 scripts/run_weekly.py
+echo "[2/2] sync git"
+pi_git_push
 echo "=== done ==="
