@@ -7,8 +7,9 @@ LOG_DIR="${LEAN_LUNCH_LOG_DIR:-$REPO_DIR/logs}"
 # 默认复用选题日报的邮件/LLM 配置；也可单独用 lean-lunch/env
 ENV_FILE="${LEAN_LUNCH_ENV_FILE:-$HOME/.config/fengmai-topics/env}"
 ALT_ENV="$HOME/.config/lean-lunch/env"
-GITHUB_REPO="${GITHUB_REPO_LEAN_LUNCH:-vane9140/LeanLunch}"
-BRANCH="${GITHUB_BRANCH:-main}"
+BRANCH="${LEAN_LUNCH_BRANCH:-main}"
+# 固定本仓库，避免复用 fengmai-topics/env 里的 GITHUB_REPO
+LEAN_LUNCH_GITHUB_REPO="${LEAN_LUNCH_GITHUB_REPO:-vane9140/LeanLunch}"
 
 mkdir -p "$LOG_DIR"
 TS="$(TZ=Asia/Shanghai date +%Y-%m-%d-%H%M)"
@@ -34,6 +35,8 @@ fi
 export LLM_API_KEY="${LLM_API_KEY:-${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}}"
 export LLM_BASE_URL="${LLM_BASE_URL:-https://api.deepseek.com/v1}"
 export LLM_MODEL="${LLM_MODEL:-deepseek-chat}"
+# source 之后再锁定仓库名，防止被共用 env 覆盖
+GITHUB_REPO="$LEAN_LUNCH_GITHUB_REPO"
 
 cd "$REPO_DIR"
 
