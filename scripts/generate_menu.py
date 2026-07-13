@@ -124,8 +124,8 @@ def history_constraints(history: dict) -> str:
     if not recent:
         return (
             "- 尚无历史记录。\n"
-            "- 本周可自由选择 4–5 道清淡减脂备餐菜。\n"
-            "- 优先：糙米/杂粮/薯类主食 + 鸡胸/鱼虾/里脊/瘦牛 + 大量绿叶/十字花科蔬菜。"
+            "- 本周主食 1–2 种；除主食外必须 5–6 道菜。\n"
+            "- 优先：糙米/杂粮/薯类主食 + 鸡胸/鳕鱼或三文鱼（煎烤）/虾/里脊/瘦牛 + 大量绿叶/十字花科蔬菜。"
         )
 
     lines = ["最近几周记录（越靠后越近）："]
@@ -139,6 +139,7 @@ def history_constraints(history: dict) -> str:
     lines.append("")
     lines.append("- 本周菜名请与最近两周明显错开，避免同菜名重复。")
     lines.append("- 主食与蛋白种类也尽量轮换（例如上周鸡胸则本周可鱼/虾/牛肉）。")
+    lines.append("- 除主食外菜品必须 5–6 道；鱼只用鳕鱼或三文鱼且煎/烤。")
     lines.append("- 严禁辣椒/麻辣；虾皮不用，虾肉可用。")
     return "\n".join(lines)
 
@@ -171,10 +172,15 @@ def parse_record_line(content: str) -> dict:
         dishes = dm.group(1).strip()
 
     if not dishes:
-        # 兜底：从「一、本周只做」段落抽菜名
-        names = re.findall(
-            r"^\d+\.\s*【[^】]+】\s*([^—\n（(]+)",
+        # 兜底：从「二、本周菜」段落抽非主食菜名
+        section = re.search(
+            r"二、本周菜[\s\S]*?(?=三、|$)",
             content,
+        )
+        block = section.group(0) if section else content
+        names = re.findall(
+            r"^\d+\.\s*【(?:纯蛋白|荤素)】\s*([^—\n（(]+)",
+            block,
             re.M,
         )
         names = [n.strip(" -—") for n in names if n.strip()]
@@ -212,28 +218,30 @@ def build_messages(monday: date) -> tuple[str, str, dict]:
     return system, user, dates
 
 
-def generate(monday: date | None = None) -> Path:
+def generate(monday: date | None = None, retries: int = 2) -> Path:
     monday = monday or resolve_week_monday()
     system, user, dates = build_messages(monday)
-    content = strip_fence(chat_completion(system, user))
+    last_err: Exception | None = None
+    content = ""
 
-    required = (
-        "一、本周只做这几道菜",
-        "二、12 个饭盒怎么装",
-        "三、备餐与冷冻要点",
-        "四、当天加热时另配的蔬菜素材",
-        "五、本周购物清单",
-        "【记录】",
-    )
-    for block in required:
-        if block not in content:
-            raise RuntimeError(f"生成结果缺少「{block}」，请重试")
-    for name in WEEKDAYS_CN:
-        if name not in content:
-            raise RuntimeError(f"生成结果缺少「{name}」，请重试")
-    for bad in ("辣椒", "麻辣", "香辣", "剁椒", "虾皮"):
-        if bad in content:
-            raise RuntimeError(f"生成结果含禁忌词「{bad}」，已拒绝，请重试")
+    for attempt in range(1, retries + 1):
+        try:
+            content = strip_fence(chat_completion(system, user))
+            validate_menu(content)
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            fail_path = ROOT / "logs" / "last-failed-content.txt"
+            fail_path.parent.mkdir(parents=True, exist_ok=True)
+            fail_path.write_text(
+                f"# attempt {attempt} error: {e}\n\n{content}\n",
+                encoding="utf-8",
+            )
+            if attempt == retries:
+                raise
+            print(f"  retry {attempt}/{retries}: {e}")
+    else:
+        raise last_err or RuntimeError("生成失败")
 
     out_dir = ROOT / "menus"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -265,6 +273,62 @@ def generate(monday: date | None = None) -> Path:
     history["weeks"] = weeks[-20:]
     save_history(history)
     return out_path
+
+
+def validate_menu(content: str) -> None:
+    """校验板块与禁忌；标题允许轻微空格差异。"""
+    compact = re.sub(r"\s+", "", content)
+    required_compact = (
+        "一、本周主食",
+        "二、本周菜",
+        "三、12个饭盒怎么装",
+        "四、备餐与冷冻要点",
+        "五、当天加热时另配的蔬菜素材",
+        "六、本周购物清单",
+        "【记录】",
+    )
+    for block in required_compact:
+        if block not in compact:
+            raise RuntimeError(f"生成结果缺少「{block}」，请重试")
+    for name in WEEKDAYS_CN:
+        if name not in content:
+            raise RuntimeError(f"生成结果缺少「{name}」，请重试")
+    for bad in (
+        "辣椒",
+        "麻辣",
+        "香辣",
+        "剁椒",
+        "虾皮",
+        "鲈鱼",
+        "带鱼",
+        "草鱼",
+        "巴沙鱼",
+        "清蒸鱼",
+    ):
+        if bad in content:
+            raise RuntimeError(f"生成结果含禁忌词「{bad}」，已拒绝，请重试")
+    if "鳕鱼" in content or "三文鱼" in content:
+        if "煎" not in content and "烤" not in content:
+            raise RuntimeError("鱼类须为鳕鱼/三文鱼，且做法为煎或烤")
+        if re.search(r"清蒸.{0,6}(鳕鱼|三文鱼)|(鳕鱼|三文鱼).{0,6}清蒸", content):
+            raise RuntimeError("鳕鱼/三文鱼不可清蒸，须煎或烤")
+    # 菜品数：记录行或「二、本周菜」下条目
+    rec = parse_record_line(content)
+    count = None
+    if str(rec.get("dish_count", "")).isdigit():
+        count = int(rec["dish_count"])
+    if count is None:
+        section = re.search(r"二、本周菜[\s\S]*?(?=三、|$)", content)
+        if section:
+            count = len(
+                re.findall(
+                    r"^\d+\.\s*【(?:纯蛋白|荤素)】",
+                    section.group(0),
+                    re.M,
+                )
+            )
+    if count is not None and count not in (5, 6):
+        raise RuntimeError(f"除主食外菜品须为 5–6 道，当前识别为 {count}")
 
 
 def main() -> int:
