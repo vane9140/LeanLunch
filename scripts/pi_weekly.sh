@@ -66,7 +66,19 @@ pi_git_push() {
 }
 
 echo "[1/2] python3 scripts/run_weekly.py"
-python3 scripts/run_weekly.py
+run_ok=0
+for try in 1 2; do
+  if python3 scripts/run_weekly.py; then
+    run_ok=1
+    break
+  fi
+  echo "WARN: run_weekly failed (pipeline try $try/2), sleep 60s then retry..."
+  sleep 60
+done
+if [[ "$run_ok" -ne 1 ]]; then
+  echo "ERROR: run_weekly failed after pipeline retries"
+  exit 1
+fi
 echo "[2/2] sync git"
 pi_git_push
 echo "=== done ==="

@@ -219,11 +219,12 @@ def build_messages(monday: date) -> tuple[str, str, dict]:
     return system, user, dates
 
 
-def generate(monday: date | None = None, retries: int = 2) -> Path:
+def generate(monday: date | None = None, retries: int = 4) -> Path:
     monday = monday or resolve_week_monday()
-    system, user, dates = build_messages(monday)
+    system, user_base, dates = build_messages(monday)
     last_err: Exception | None = None
     content = ""
+    user = user_base
 
     for attempt in range(1, retries + 1):
         try:
@@ -241,6 +242,14 @@ def generate(monday: date | None = None, retries: int = 2) -> Path:
             if attempt == retries:
                 raise
             print(f"  retry {attempt}/{retries}: {e}")
+            # 把上次失败原因塞回提示，避免重复踩坑（尤其是「无煎」误写/误判类）
+            user = (
+                user_base
+                + "\n\n## 上次生成被拒，请务必修正后重写全文\n"
+                + f"- 失败原因：{e}\n"
+                + "- 非鱼菜只能炒/炖/卤；「煎」只允许出现在含鳕鱼或三文鱼的那一道菜里。\n"
+                + "- 不要写「无煎」「不用煎」这类说明句，直接按正确做法写菜即可。\n"
+            )
     else:
         raise last_err or RuntimeError("生成失败")
 
@@ -309,16 +318,22 @@ def validate_menu(content: str) -> None:
         if bad in content:
             raise RuntimeError(f"生成结果含禁忌词「{bad}」，已拒绝，请重试")
     if "鳕鱼" in content or "三文鱼" in content:
-        if "煎" not in content and "烤" not in content:
+        # 「无煎」等否定不算做法；须有烤，或鱼菜行里有真正的煎
+        has_roast = "烤" in content
+        has_fish_fry = bool(
+            re.search(
+                r"^.*(?:鳕鱼|三文鱼).*(?<![无不禁勿])煎|(?<![无不禁勿])煎.*(?:鳕鱼|三文鱼).*$",
+                content,
+                re.M,
+            )
+        )
+        if not has_roast and not has_fish_fry:
             raise RuntimeError("鱼类须为鳕鱼/三文鱼，且做法为煎或烤")
         if re.search(r"清蒸.{0,6}(鳕鱼|三文鱼)|(鳕鱼|三文鱼).{0,6}清蒸", content):
             raise RuntimeError("鳕鱼/三文鱼不可清蒸，须煎或烤")
-    # 非鱼菜禁止「煎」：每个「煎」窗口须紧挨鳕鱼/三文鱼
-    for m in re.finditer(r".{0,10}煎.{0,10}", content):
-        window = m.group(0)
-        if "鳕鱼" in window or "三文鱼" in window:
-            continue
-        raise RuntimeError(f"非鱼菜不可用煎（仅鳕鱼/三文鱼可煎）：…{window.strip()}…")
+
+    _validate_no_nonfish_fry(content)
+
     # 菜品数：记录行或「二、本周菜」下条目
     rec = parse_record_line(content)
     count = None
@@ -336,6 +351,45 @@ def validate_menu(content: str) -> None:
             )
     if count is not None and count not in (5, 6):
         raise RuntimeError(f"除主食外菜品须为 5–6 道，当前识别为 {count}")
+
+
+_NEG_FRY = re.compile(r"(不用|没有|禁止|无|勿|非|不)煎")
+
+
+def _validate_no_nonfish_fry(content: str) -> None:
+    """非鱼菜禁止「煎」；忽略「无煎」等否定表述；按整行判断。"""
+    dish_lines = re.findall(
+        r"^\d+\.\s*【(?:纯蛋白|荤素)】[^\n]+",
+        content,
+        re.M,
+    )
+    # 饭盒行也可能带菜名
+    pack_lines = re.findall(
+        r"^周[一二三四五六][：:][^\n]+",
+        content,
+        re.M,
+    )
+    for line in dish_lines + pack_lines:
+        scrubbed = _NEG_FRY.sub("", line)
+        if "煎" not in scrubbed:
+            continue
+        if "鳕鱼" in line or "三文鱼" in line:
+            continue
+        raise RuntimeError(
+            f"非鱼菜不可用煎（仅鳕鱼/三文鱼可煎）：…{line.strip()[:40]}…"
+        )
+    # 兜底：正文其它位置若出现非否定的「煎」，也须同句含鱼
+    for m in re.finditer(r"[^\n]{0,20}煎[^\n]{0,20}", content):
+        window = m.group(0)
+        if _NEG_FRY.search(window):
+            continue
+        if "鳕鱼" in window or "三文鱼" in window:
+            continue
+        # 已在菜行检查过的跳过；这里抓说明段里误写的「香煎鸡胸」等
+        if re.search(r"香煎(?!鳕鱼|三文鱼)|煎(?!鳕|三文)(?:鸡|牛|猪|虾|里脊)", window):
+            raise RuntimeError(
+                f"非鱼菜不可用煎（仅鳕鱼/三文鱼可煎）：…{window.strip()}…"
+            )
 
 
 def main() -> int:
